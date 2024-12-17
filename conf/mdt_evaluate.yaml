@@ -31,6 +31,8 @@ cfg_value: 1
 sigma_min: 0.001
 sigma_max: 80
 noise_scheduler: exponential
+visualize_attention: True
+merge_attn_heads: True
 # sigma_min: null
 # sigma_max: null
 # noise_scheduler: null

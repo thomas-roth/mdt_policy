@@ -1,3 +1,4 @@
+from collections import defaultdict
 import contextlib
 import logging
 from pathlib import Path
@@ -11,6 +12,8 @@ from omegaconf import OmegaConf
 import pyhash
 import torch
 from hydra.core.global_hydra import GlobalHydra
+from tqdm import tqdm
+import wandb
 
 from mdt.utils.utils import add_text, format_sftp_path
 
@@ -343,3 +346,102 @@ def get_env_state_for_initial_condition(initial_condition):
         scene_obs[23] = np.random.uniform(*block_rot_z_range)
 
     return robot_obs, scene_obs
+
+
+def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True):
+    heatmaps = [defaultdict(list) for _ in range(len(attn_weights_sequences))]
+
+    for sequence_number, attn_weights_sequence in tqdm(enumerate(attn_weights_sequences), total=len(attn_weights_sequences), desc="Generating attention heatmaps"):
+        for attn_weights_task in tqdm(attn_weights_sequence, leave=False):
+            subtask = attn_weights_task["subtask"].replace(" ", "_")
+
+            for attn_weights_step_plus_model_input in attn_weights_task["attns"]:
+                attn_weights_step = attn_weights_step_plus_model_input["attns"]
+                img_static = attn_weights_step_plus_model_input["img_static"][0][0].cpu().detach().numpy().transpose(1, 2, 0) # (H, W, C) = (224, 224, 3)
+                img_gripper = attn_weights_step_plus_model_input["img_gripper"][0][0].cpu().detach().numpy().transpose(1, 2, 0) # (H, W, C) = (84, 84, 3)
+
+                img_static = cv2.cvtColor(img_static, cv2.COLOR_RGB2GRAY)
+                img_gripper = cv2.cvtColor(img_gripper, cv2.COLOR_RGB2GRAY)
+                img_static_size = img_static.shape[0]
+
+                if attn_weights_step is None:
+                    continue # skip if step action already predicted in previous step (multistep prediction)
+
+                for attn_weights_layers in attn_weights_step:
+                    attn_weights_layers_enc = attn_weights_layers["enc"]
+                    attn_weights_layers_dec = attn_weights_layers["dec"]
+
+                    for layer, attn_weights_enc in enumerate(attn_weights_layers_enc):
+                        attn_weights_enc = attn_weights_enc.cpu().detach().numpy() # (B, nh, Te, Te) = (1, 8, 4, 4)
+
+                        # normalize attention weights
+                        attn_weights_enc = (attn_weights_enc - attn_weights_enc.min()) / (attn_weights_enc.max() - attn_weights_enc.min())
+                        attn_weights_enc = (attn_weights_enc * 255)
+                        
+                        if merge_attn_heads:
+                            attn_weights_enc = attn_weights_enc[0].mean(axis=0).astype(np.uint8) # (Te, Te) = (4, 4)
+
+                            attn_weights_enc = cv2.resize(attn_weights_enc, (img_static_size, img_static_size))
+                            attn_weights_enc = cv2.applyColorMap(attn_weights_enc, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+
+                            heatmaps[sequence_number][subtask].append(wandb.Image(attn_weights_enc, caption=f"encoder_merged_heads_layer_{layer}",
+                                                            masks={"img_static": {"mask_data": img_static}}))
+                        else:
+                            attn_weights_enc = attn_weights_enc[0].astype(np.uint8) # (nh, Te, Te) = (8, 4, 4)
+
+                            for attn_weights_enc_head in attn_weights_enc:
+                                attn_weights_enc_head = cv2.resize(attn_weights_enc_head, (img_static_size, img_static_size))
+                                attn_weights_enc_head = cv2.applyColorMap(attn_weights_enc_head, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+                                
+                                heatmaps[sequence_number][subtask].append(wandb.Image(attn_weights_enc_head, caption=f"encoder_single_head_layer_{layer}",
+                                                                masks={"img_static": {"mask_data": img_static}}))
+                    
+                    for layer, attn_weights_dec in enumerate(attn_weights_layers_dec):
+                        self_attn_weights_dec = attn_weights_dec["self"].cpu().detach().numpy() # (B, nh, Td, Td) = (1, 8, 10, 10)
+                        cross_attn_weights_dec = attn_weights_dec["cross"].cpu().detach().numpy() # (B, nh, Td, Te) = (1, 8, 10, 4)
+
+                        # normalize attention weights
+                        self_attn_weights_dec = (self_attn_weights_dec - self_attn_weights_dec.min()) / (self_attn_weights_dec.max() - self_attn_weights_dec.min())
+                        self_attn_weights_dec = (self_attn_weights_dec * 255)
+                        cross_attn_weights_dec = (cross_attn_weights_dec - cross_attn_weights_dec.min()) / (cross_attn_weights_dec.max() - cross_attn_weights_dec.min())
+                        cross_attn_weights_dec = (cross_attn_weights_dec * 255)
+
+                        if merge_attn_heads:
+                            self_attn_weights_dec = self_attn_weights_dec[0].mean(axis=0).astype(np.uint8) # (Td, Td) = (10, 10)
+
+                            # self_attn_weights_dec = cv2.resize(self_attn_weights_dec, (250, 250)) # TODO: remove?
+                            self_attn_weights_dec = cv2.applyColorMap(self_attn_weights_dec, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
+
+                            heatmaps[sequence_number][subtask].append(wandb.Image(self_attn_weights_dec, caption=f"decoder_self_attn_merged_heads_layer_{layer}")) # mask: encoder output ("context" in mdtv_transformer.forward())
+
+                            cross_attn_weights_dec = cross_attn_weights_dec[0].mean(axis=0).astype(np.uint8) # (Td, Te) = (10, 4)
+
+                            cross_attn_weights_dec = cv2.resize(cross_attn_weights_dec, (img_static_size, img_static_size))
+                            cross_attn_weights_dec = cv2.applyColorMap(cross_attn_weights_dec, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+
+                            img_gripper_resized = cv2.resize(img_gripper, (img_static_size, img_static_size))
+                            heatmaps[sequence_number][subtask].append(wandb.Image(cross_attn_weights_dec, caption=f"decoder_cross_attn_merged_heads_layer_{layer}",
+                                                                  masks={"img_static": {"mask_data": img_static},
+                                                                         "img_gripper": {"mask_data": img_gripper_resized}}))
+                        else:
+                            self_attn_weights_dec = self_attn_weights_dec[0].astype(np.uint8) # (nh, Td, Td) = (8, 10, 10)
+                            cross_attn_weights_dec = cross_attn_weights_dec[0].astype(np.uint8) # (nh, Td, Te) = (8, 10, 4)
+
+                            for self_attn_weights_dec_head, cross_attn_weights_dec_head in zip(self_attn_weights_dec, cross_attn_weights_dec):
+                                # self_attn_weights_dec_head = cv2.resize(self_attn_weights_dec_head, (250, 250)) # TODO: remove?
+                                self_attn_weights_dec_head = cv2.applyColorMap(self_attn_weights_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
+
+                                heatmaps[sequence_number][subtask].append(wandb.Image(self_attn_weights_dec_head, caption=f"decoder_self_attn_single_head_layer_{layer}"))
+                            
+                                cross_attn_weights_dec_head = cv2.resize(cross_attn_weights_dec_head, (img_static_size, img_static_size))
+                                cross_attn_weights_dec_head = cv2.applyColorMap(cross_attn_weights_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+
+                                img_gripper_resized = cv2.resize(img_gripper, (img_static_size, img_static_size))
+                                heatmaps[sequence_number][subtask].append(wandb.Image(cross_attn_weights_dec_head, caption=f"decoder_cross_attn_single_head_layer_{layer}",
+                                                                      masks={"img_static": {"mask_data": img_static},
+                                                                             "img_gripper": {"mask_data": img_gripper_resized}}))
+    
+    for sequence_number, heatmaps_sequence in enumerate(heatmaps):
+        for subtask in heatmaps_sequence.keys():
+            print(f"{len(heatmaps[sequence_number][subtask]):04} heatmaps for sequence {sequence_number} and subtask {subtask}")
+    return heatmaps

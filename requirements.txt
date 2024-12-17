@@ -29,4 +29,5 @@ moviepy
 tqdm
 termcolor
 wandb
+wandb[media]
 einops_exts

@@ -939,16 +939,18 @@ def sample_ddim(
     sigma_fn = lambda t: t.neg().exp()
     t_fn = lambda sigma: sigma.log().neg()
     old_denoised = None
+    attns_batch = []
 
     for i in trange(len(sigmas) - 1, disable=disable):
         # predict the next action
-        denoised = model(state, action, goal, sigmas[i] * s_in, **extra_args)
+        denoised, attn_enc_dec = model(state, action, goal, sigmas[i] * s_in, **extra_args)
+        attns_batch.append(attn_enc_dec)
         if callback is not None:
             callback({'action': action, 'i': i, 'sigma': sigmas[i], 'sigma_hat': sigmas[i], 'denoised': denoised})
         t, t_next = t_fn(sigmas[i]), t_fn(sigmas[i + 1])
         h = t_next - t
         action = (sigma_fn(t_next) / sigma_fn(t)) * action - (-h).expm1() * denoised
-    return action
+    return action, attns_batch
 
 
 

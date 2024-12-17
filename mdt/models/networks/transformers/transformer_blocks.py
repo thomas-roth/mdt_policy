@@ -118,6 +118,7 @@ class Attention(nn.Module):
 
     def forward(self, x, context=None, custom_attn_mask=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
+        att = None
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         # if the context is not None we do cross-attention othberwise self=attention
@@ -140,6 +141,8 @@ class Attention(nn.Module):
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=custom_attn_mask, dropout_p=self.attn_dropout.p if self.training else 0, is_causal=self.causal)
+            v_eye = torch.eye(k.size(-2)).to(k.device)
+            att = torch.nn.functional.scaled_dot_product_attention(q, k, v_eye, attn_mask=custom_attn_mask, dropout_p=self.attn_dropout.p if self.training else 0, is_causal=self.causal)
         else:
             # manual implementation of attention
             att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -155,7 +158,7 @@ class Attention(nn.Module):
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        return y
+        return y, att
     
 
 class MLP(nn.Module):
@@ -207,11 +210,18 @@ class Block(nn.Module):
         self.mlp = MLP(n_embd, bias, mlp_pdrop)
 
     def forward(self, x, context=None, custom_attn_mask=None):
-        x = x + self.attn(self.ln_1(x), custom_attn_mask=custom_attn_mask)
+        x_attn, attn_weights = self.attn(self.ln_1(x), custom_attn_mask=custom_attn_mask)
+        x = x + x_attn
+
         if self.use_cross_attention and context is not None:
-            x = x + self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
+            x_cross_attn, cross_attn_weights = self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
+            x += x_cross_attn
+
         x = x + self.mlp(self.ln_2(x))
-        return x
+
+        if self.use_cross_attention and context is not None:
+            return x, attn_weights, cross_attn_weights
+        return x, attn_weights
 
 
 
@@ -237,9 +247,10 @@ class CrossAttentionOnlyBlock(nn.Module):
         self.mlp = MLP(n_embd, bias, mlp_pdrop)
 
     def forward(self, x, context=None, custom_attn_mask=None):
-        x = x + self.cross_att(self.ln_1(x), context, custom_attn_mask=custom_attn_mask)
+        x_attn = self.cross_att(self.ln_1(x), context, custom_attn_mask=custom_attn_mask)
+        x = x + x_attn
         x = x + self.mlp(self.ln_2(x))
-        return x
+        return x, x_attn
 
 
 class AdaLNZero(nn.Module):
@@ -295,18 +306,22 @@ class ConditionedBlock(Block):
         # Attention with modulation
         x_attn = self.ln_1(x)
         x_attn = modulate(x_attn, shift_msa, scale_msa)
-        x = x + gate_msa * self.attn(x_attn, custom_attn_mask=custom_attn_mask)
+        x_attn, attn_weights = self.attn(x_attn, custom_attn_mask=custom_attn_mask)
+        x = x + gate_msa * x_attn
         
         # Cross attention if used
         if self.use_cross_attention and context is not None:
-            x = x + self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
+            x_cross_attn, cross_attn_weights = self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
+            x += x_cross_attn
         
         # MLP with modulation
         x_mlp = self.ln_2(x)
         x_mlp = modulate(x_mlp, shift_mlp, scale_mlp)
         x = x + gate_mlp * self.mlp(x_mlp)
         
-        return x
+        if self.use_cross_attention and context is not None:
+            return x, attn_weights, cross_attn_weights
+        return x, attn_weights
 
 class NoiseBlock(Block):
     """
@@ -333,12 +348,18 @@ class NoiseBlock(Block):
                          bias=bias)
 
     def forward(self, x, c, context=None, custom_attn_mask=None):
-        
-        x = x + self.attn(self.ln_1(x) + c, custom_attn_mask=custom_attn_mask)
+        x_attn, attn_weights = self.attn(self.ln_1(x), custom_attn_mask=custom_attn_mask)
+        x += x_attn
+
         if self.use_cross_attention and context is not None:
-            x = x + self.cross_att(self.ln3(x) + c, context, custom_attn_mask=custom_attn_mask)
+            x_cross_attn, cross_attn_weights = self.cross_att(self.ln3(x) + c, context, custom_attn_mask=custom_attn_mask)
+            x += x_cross_attn
+        
         x = x + self.mlp(self.ln_2(x))
-        return x
+
+        if self.use_cross_attention and context is not None:
+            return x, attn_weights, cross_attn_weights
+        return x, attn_weights
     
 
 class TransformerEncoder(nn.Module):
@@ -374,10 +395,12 @@ class TransformerEncoder(nn.Module):
         self.ln = LayerNorm(embed_dim, bias)
 
     def forward(self, x, custom_attn_mask=None):
+        attn_weights = []
         for layer in self.blocks:
-            x = layer(x, custom_attn_mask=custom_attn_mask)
+            x, attn = layer(x, custom_attn_mask=custom_attn_mask)
+            attn_weights.append(attn)
         x = self.ln(x)
-        return x
+        return x, attn_weights
     
     
 class TransformerEncoderInterleaved(nn.Module):
@@ -499,10 +522,12 @@ class TransformerDecoder(nn.Module):
         self.ln = LayerNorm(embed_dim, bias)
 
     def forward(self, x, cond=None, custom_attn_mask=None):
+        attn_weights = []
         for layer in self.blocks:
-            x = layer(x, cond, custom_attn_mask=custom_attn_mask)
+            x, attn = layer(x, cond, custom_attn_mask=custom_attn_mask)
+            attn_weights.append(attn)
         x = self.ln(x)
-        return x
+        return x, attn_weights
 
 
 
@@ -563,10 +588,12 @@ class TransformerFiLMDecoder(nn.Module):
         self.ln = LayerNorm(embed_dim, bias)
 
     def forward(self, x, c, cond=None, custom_attn_mask=None):
+        attn_weights = []
         for layer in self.blocks:
-            x = layer(x, c, cond, custom_attn_mask=custom_attn_mask)
+            x, attn_self, attn_cross = layer(x, c, cond, custom_attn_mask=custom_attn_mask)
+            attn_weights.append({"self": attn_self, "cross": attn_cross})
         x = self.ln(x)
-        return x
+        return x, attn_weights
 
 
 class TransformerFiLMDecoderInterleaved(nn.Module):

@@ -545,9 +545,9 @@ class MDTVAgent(pl.LightningModule):
 
         x = torch.randn((len(latent_goal), self.act_window_size, 7), device=self.device) * self.sigma_max
 
-        actions = self.sample_loop(sigmas, x, input_state, latent_goal, latent_plan, self.sampler_type, extra_args)
+        actions, attns = self.sample_loop(sigmas, x, input_state, latent_goal, latent_plan, self.sampler_type, extra_args)
 
-        return actions
+        return actions, attns
 
     def make_sample_density(self):
         """ 
@@ -648,14 +648,14 @@ class MDTVAgent(pl.LightningModule):
         elif sampler_type == 'dpmpp_2m_sde':
             x_0 = sample_dpmpp_sde(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
         elif sampler_type == 'ddim':
-            x_0 = sample_ddim(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
+            x_0, attns = sample_ddim(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
         elif sampler_type == 'dpmpp_2s':
             x_0 = sample_dpmpp_2s(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
         elif sampler_type == 'dpmpp_2_with_lms':
             x_0 = sample_dpmpp_2_with_lms(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
         else:
             raise ValueError('desired sampler type not found!')
-        return x_0    
+        return x_0, attns
     
     def get_noise_schedule(self, n_sampling_steps, noise_schedule_type):
         """
@@ -710,13 +710,13 @@ class MDTVAgent(pl.LightningModule):
         perceptual_emb = self.compute_voltron_embeddings(rgb_static, rgb_gripper)
         perceptual_emb['modality'] = "lang"
         
-        act_seq = self.denoise_actions(
+        act_seq, attns = self.denoise_actions(
             torch.zeros_like(latent_goal).to(latent_goal.device),
             perceptual_emb,
             latent_goal,
             inference=True,
         )
-        return act_seq
+        return act_seq, attns
 
     def step(self, obs, goal):
         """
@@ -731,8 +731,10 @@ class MDTVAgent(pl.LightningModule):
         Returns:
             Predicted action.
         """
+        attns = None
+
         if self.rollout_step_counter % self.multistep == 0:
-            pred_action_seq = self(obs, goal)
+            pred_action_seq, attns = self(obs, goal)
 
             self.pred_action_seq = pred_action_seq  
             
@@ -743,7 +745,7 @@ class MDTVAgent(pl.LightningModule):
         if self.rollout_step_counter == self.multistep:
             self.rollout_step_counter = 0
         
-        return current_action
+        return current_action, attns
     
     def on_train_start(self)-> None:
         

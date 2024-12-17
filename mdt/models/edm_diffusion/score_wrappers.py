@@ -74,10 +74,11 @@ class GCDenoiser(nn.Module):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            The output of the forward pass.
+            The output of the forward pass as well as the attention weights.
         """
         c_skip, c_out, c_in = [append_dims(x, action.ndim) for x in self.get_scalings(sigma)]
-        return self.inner_model(state, action * c_in, goal, sigma, **kwargs) * c_out + action * c_skip
+        result, attn = self.inner_model(state, action * c_in, goal, sigma, **kwargs)
+        return result * c_out + action * c_skip, attn
     
     def forward_context_only(self, state, action, goal, sigma, **kwargs):
         """

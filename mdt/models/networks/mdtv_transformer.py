@@ -206,9 +206,10 @@ class MDTVTransformer(nn.Module):
             torch.nn.init.normal_(module.pos_emb, mean=0.0, std=0.02)
 
     def forward(self, states, actions, goals, sigma, uncond: Optional[bool] = False):
-        context = self.forward_enc_only(states, actions, goals, sigma, uncond)
-        pred_actions = self.forward_dec_only(context, actions, sigma)
-        return pred_actions
+        context, attn_weights_enc = self.forward_enc_only(states, actions, goals, sigma, uncond)
+        pred_actions, attn_weights_dec = self.forward_dec_only(context, actions, sigma)
+        attn_weights = {"enc": attn_weights_enc, "dec": attn_weights_dec}
+        return pred_actions, attn_weights
 
     def forward_enc_only(self, states, actions=None, goals=None, sigma=None, uncond: Optional[bool] = False):
         emb_t = self.process_sigma_embeddings(sigma) if not self.use_ada_conditioning else None
@@ -217,9 +218,9 @@ class MDTVTransformer(nn.Module):
         goal_embed = self.process_goal_embeddings(goals, states)
 
         input_seq = self.concatenate_inputs(emb_t, goal_embed, state_embed, proprio_embed, uncond)
-        context = self.encoder(input_seq)
+        context, attn_weights_enc = self.encoder(input_seq)
         self.latent_encoder_emb = context
-        return context
+        return context, attn_weights_enc
 
     def forward_dec_only(self, context, actions, sigma):
         emb_t = self.process_sigma_embeddings(sigma)
@@ -228,12 +229,12 @@ class MDTVTransformer(nn.Module):
 
 
         if self.use_ada_conditioning:
-            x = self.decoder(action_x, emb_t, context)
+            x, attn_weights_dec = self.decoder(action_x, emb_t, context)
         else:
-            x = self.decoder(action_x, context)
+            x, attn_weights_dec = self.decoder(action_x, context)
 
         pred_actions = self.action_pred(x)
-        return pred_actions
+        return pred_actions, attn_weights_dec
 
     def process_sigma_embeddings(self, sigma):
         sigmas = sigma.log() / 4

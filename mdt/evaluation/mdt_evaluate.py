@@ -111,8 +111,8 @@ def print_and_save(total_results, plan_dicts, attn_weights_sequences, cfg, log_d
     if cfg.visualize_attention:
         print()
 
-        heatmaps = gen_heatmaps(attn_weights_sequences, cfg.merge_attn_heads)
-        for sequence_number, heatmaps_sequence in enumerate(heatmaps):
+        heatmaps = gen_heatmaps(attn_weights_sequences, cfg.merge_attn_heads, gen_for_enc=False, gen_for_dec_self=True, gen_for_dec_cross=True)
+        for sequence_number, heatmaps_sequence in tqdm(enumerate(heatmaps), total=len(heatmaps), desc="Uploading heatmaps for sequences to wandb"):
             i = 0
             num_zeros_prepend = len(str(len(heatmaps_sequence)))
             for subtask, heatmaps_subtask in heatmaps_sequence.items():

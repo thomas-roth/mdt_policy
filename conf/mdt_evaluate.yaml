@@ -19,7 +19,7 @@ log_wandb: True
 wandb:
   entity: thomas-roth-karlsruhe-institute-of-technology
 debug: False
-dataset_path: /media/thomas/TOSHIBA EXT/hiwi/task_D_D
+dataset_path: /media/thomas/SICHERUNGEN/hiwi/task_D_D
 train_folder: /home/thomas/hiwi/mdt_policy/pretrained_models/CALVIN D/mdtv_1_d
 model_name: mdt_test
 device: 0

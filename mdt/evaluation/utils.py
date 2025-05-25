@@ -8,6 +8,7 @@ import importlib
 
 import cv2
 import hydra
+import imageio
 import numpy as np
 from omegaconf import OmegaConf
 import pyhash
@@ -20,6 +21,9 @@ from mdt.utils.utils import add_text, format_sftp_path
 
 
 ROOT_OUTPUT_PATH = "/home/troth/hiwi/mdt_policy/outputs"
+ENC_RESIZE_SHAPE = (224, 224) # size of encoder input images
+DEC_SELF_RESIZE_SHAPE = (250, 250)
+DEC_CROSS_RESIZE_SHAPE = (100, 250) # preserves 4:10 aspect ratio
 
 
 hasher = pyhash.fnv1_32()
@@ -353,7 +357,7 @@ def get_env_state_for_initial_condition(initial_condition):
     return robot_obs, scene_obs
 
 
-def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True, gen_for_dec_self=True, gen_for_dec_cross=True):
+def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True, gen_for_dec_self=True, gen_for_dec_cross=True, save_gifs_not_jpgs=True):
     output_dirs = [os.path.join(ROOT_OUTPUT_PATH, day, time) for day in os.listdir(ROOT_OUTPUT_PATH) for time in os.listdir(Path(ROOT_OUTPUT_PATH) / day)]
     latest_output_dir = max(output_dirs)
     heatmap_output_path = f"{latest_output_dir}/attvis"
@@ -371,11 +375,13 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
 
                 img_static = cv2.cvtColor(img_static, cv2.COLOR_RGB2GRAY)
                 img_gripper = cv2.cvtColor(img_gripper, cv2.COLOR_RGB2GRAY)
-                img_static_size = img_static.shape[0]
-                img_gripper_resized = cv2.resize(img_gripper, (img_static_size, img_static_size), interpolation=cv2.INTER_NEAREST)
+                img_gripper_resized = cv2.resize(img_gripper, (img_static.shape[0], img_static.shape[1]), interpolation=cv2.INTER_NEAREST)
 
                 if attn_weights_step is None:
-                    continue # skip if step action already predicted in previous step (multistep prediction)
+                    continue # skip if step action already predicted in previous step (multistep prediction) 
+                
+                if save_gifs_not_jpgs:
+                    heatmap_gifs = defaultdict(lambda: defaultdict(list))
 
                 for noise_level_inv, attn_weights_noise_level in enumerate(attn_weights_step):
                     noise_level = len(attn_weights_step) - noise_level_inv - 1
@@ -394,28 +400,34 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
                             if merge_attn_heads:
                                 attn_weights_enc = attn_weights_enc[0].mean(axis=0).astype(np.uint8) # (Te, Te) = (4, 4)
 
-                                attn_weights_enc = cv2.resize(attn_weights_enc, (img_static_size, img_static_size), interpolation=cv2.INTER_NEAREST)
+                                attn_weights_enc = cv2.resize(attn_weights_enc, ENC_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                 attn_weights_enc = cv2.applyColorMap(attn_weights_enc, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
 
-                                img_name = f"encoder_noise_level_{noise_level}_layer_{layer}_merged_heads"
+                                if save_gifs_not_jpgs:
+                                    heatmap_gifs[layer]["enc"].append(attn_weights_enc)
+                                else:
+                                    img_name = f"encoder_noise_level_{noise_level}_layer_{layer}_merged_heads"
 
-                                heatmaps[sequence_number][subtask].append(wandb.Image(attn_weights_enc, caption=img_name, masks={"img_static": {"mask_data": img_static}}))
+                                    heatmaps[sequence_number][subtask].append(wandb.Image(attn_weights_enc, caption=img_name, masks={"img_static": {"mask_data": img_static}}))
 
-                                os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc", exist_ok=True)
-                                cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc/{img_name}.jpg", attn_weights_enc)
+                                    os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc", exist_ok=True)
+                                    cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc/{img_name}.jpg", attn_weights_enc)
                             else:
                                 attn_weights_enc = attn_weights_enc[0].astype(np.uint8) # (nh, Te, Te) = (8, 4, 4)
 
                                 for head_number, attn_weights_enc_head in enumerate(attn_weights_enc):
-                                    attn_weights_enc_head = cv2.resize(attn_weights_enc_head, (img_static_size, img_static_size), interpolation=cv2.INTER_NEAREST)
+                                    attn_weights_enc_head = cv2.resize(attn_weights_enc_head, ENC_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                     attn_weights_enc_head = cv2.applyColorMap(attn_weights_enc_head, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
 
-                                    img_name = f"encoder_noise_level_{noise_level}_layer_{layer}_head_{head_number}"
-                                    
-                                    heatmaps[sequence_number][subtask].append(wandb.Image(attn_weights_enc_head, caption=img_name, masks={"img_static": {"mask_data": img_static}}))
-
-                                    os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc", exist_ok=True)
-                                    cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc/{img_name}.jpg", attn_weights_enc_head)
+                                    if save_gifs_not_jpgs:
+                                        heatmap_gifs[layer]["enc"].append(attn_weights_enc_head)
+                                    else:
+                                        img_name = f"encoder_noise_level_{noise_level}_layer_{layer}_head_{head_number}"
+                                        
+                                        heatmaps[sequence_number][subtask].append(wandb.Image(attn_weights_enc_head, caption=img_name, masks={"img_static": {"mask_data": img_static}}))
+                                        
+                                        os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc", exist_ok=True)
+                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc/{img_name}.jpg", attn_weights_enc_head)
                     
                     if gen_for_dec_self or gen_for_dec_cross:
                         for layer, attn_weights_dec in enumerate(attn_weights_noise_level_dec):
@@ -432,56 +444,96 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
                                 if gen_for_dec_self:
                                     self_attn_weights_dec = self_attn_weights_dec[0].mean(axis=0).astype(np.uint8) # (Td, Td) = (10, 10)
 
-                                    self_attn_weights_dec = cv2.resize(self_attn_weights_dec, (250, 250), interpolation=cv2.INTER_NEAREST)
+                                    self_attn_weights_dec = cv2.resize(self_attn_weights_dec, DEC_SELF_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                     self_attn_weights_dec = cv2.applyColorMap(self_attn_weights_dec, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
 
-                                    img_name = f"decoder_self_attn_noise_level_{noise_level}_layer_{layer}_merged_heads"
+                                    if save_gifs_not_jpgs:
+                                        self_attn_weights_dec_rgb = cv2.cvtColor(self_attn_weights_dec, cv2.COLOR_BGR2RGB)
+                                        heatmap_gifs[layer]["dec_self"].append(self_attn_weights_dec_rgb)
+                                    else:
+                                        img_name = f"decoder_self_attn_noise_level_{noise_level}_layer_{layer}_merged_heads"
 
-                                    heatmaps[sequence_number][subtask].append(wandb.Image(self_attn_weights_dec, caption=img_name)) # mask: encoder output ("context" in mdtv_transformer.forward())
-
-                                    os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self", exist_ok=True)
-                                    cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self/{img_name}.jpg", self_attn_weights_dec)
+                                        heatmaps[sequence_number][subtask].append(wandb.Image(self_attn_weights_dec, caption=img_name)) # mask: encoder output ("context" in mdtv_transformer.forward())
+                                        
+                                        os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self", exist_ok=True)
+                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self/{img_name}.jpg", self_attn_weights_dec)
                                 if gen_for_dec_cross:
                                     cross_attn_weights_dec = cross_attn_weights_dec[0].mean(axis=0).astype(np.uint8) # (Td, Te) = (10, 4)
 
-                                    cross_attn_weights_dec = cv2.resize(cross_attn_weights_dec, (img_static_size, img_static_size), interpolation=cv2.INTER_NEAREST)
+                                    cross_attn_weights_dec = cv2.resize(cross_attn_weights_dec, DEC_CROSS_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                     cross_attn_weights_dec = cv2.applyColorMap(cross_attn_weights_dec, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
 
-                                    img_name = f"decoder_cross_attn_noise_level_{noise_level}_layer_{layer}_merged_heads"
+                                    if save_gifs_not_jpgs:
+                                        cross_attn_weights_dec_rgb = cv2.cvtColor(cross_attn_weights_dec, cv2.COLOR_BGR2RGB)
+                                        heatmap_gifs[layer]["dec_cross"].append(cross_attn_weights_dec_rgb)
+                                    else:
+                                        img_name = f"decoder_cross_attn_noise_level_{noise_level}_layer_{layer}_merged_heads"
 
-                                    heatmaps[sequence_number][subtask].append(wandb.Image(cross_attn_weights_dec, caption=img_name, masks={"img_static": {"mask_data": img_static},
-                                                                                                                                           "img_gripper": {"mask_data": img_gripper_resized}}))
-                                    
-                                    os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross", exist_ok=True)
-                                    cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross/{img_name}.jpg", cross_attn_weights_dec)
+                                        heatmaps[sequence_number][subtask].append(wandb.Image(cross_attn_weights_dec, caption=img_name, masks={"img_static": {"mask_data": img_static},
+                                                                                                                                            "img_gripper": {"mask_data": img_gripper_resized}}))
+                                        
+                                        os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross", exist_ok=True)
+                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross/{img_name}.jpg", cross_attn_weights_dec)
                             else:
                                 self_attn_weights_dec = self_attn_weights_dec[0].astype(np.uint8) # (nh, Td, Td) = (8, 10, 10)
                                 cross_attn_weights_dec = cross_attn_weights_dec[0].astype(np.uint8) # (nh, Td, Te) = (8, 10, 4)
 
                                 for head_number, (self_attn_weights_dec_head, cross_attn_weights_dec_head) in enumerate(zip(self_attn_weights_dec, cross_attn_weights_dec)):
                                     if gen_for_dec_self:
-                                        self_attn_weights_dec = cv2.resize(self_attn_weights_dec, (250, 250), interpolation=cv2.INTER_NEAREST)
+                                        self_attn_weights_dec = cv2.resize(self_attn_weights_dec, DEC_SELF_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                         self_attn_weights_dec_head = cv2.applyColorMap(self_attn_weights_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
 
-                                        img_name = f"decoder_self_attn_noise_level_{noise_level}_layer_{layer}_head_{head_number}"
+                                        if save_gifs_not_jpgs:
+                                            self_attn_weights_dec_head_rgb = cv2.cvtColor(self_attn_weights_dec_head, cv2.COLOR_BGR2RGB)
+                                            heatmap_gifs[layer]["dec_self"].append(self_attn_weights_dec_head_rgb)
+                                        else:
+                                            img_name = f"decoder_self_attn_noise_level_{noise_level}_layer_{layer}_head_{head_number}"
 
-                                        heatmaps[sequence_number][subtask].append(wandb.Image(self_attn_weights_dec_head, caption=img_name))
+                                            heatmaps[sequence_number][subtask].append(wandb.Image(self_attn_weights_dec_head, caption=img_name))
 
-                                        os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self", exist_ok=True)
-                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self/{img_name}.jpg", self_attn_weights_dec_head)
+                                            os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self", exist_ok=True)
+                                            cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self/{img_name}.jpg", self_attn_weights_dec_head)
+                                    
                                     if gen_for_dec_cross:
-                                        cross_attn_weights_dec_head = cv2.resize(cross_attn_weights_dec_head, (img_static_size, img_static_size), interpolation=cv2.INTER_NEAREST)
+                                        cross_attn_weights_dec_head = cv2.resize(cross_attn_weights_dec_head, DEC_CROSS_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                         cross_attn_weights_dec_head = cv2.applyColorMap(cross_attn_weights_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
 
-                                        img_name = f"decoder_cross_attn_noise_level_{noise_level}_layer_{layer}_head_{head_number}"
+                                        if save_gifs_not_jpgs:
+                                            cross_attn_weights_dec_head_rgb = cv2.cvtColor(cross_attn_weights_dec_head, cv2.COLOR_BGR2RGB)
+                                            heatmap_gifs[layer]["dec_cross"].append(cross_attn_weights_dec_head_rgb)
+                                        else:
+                                            img_name = f"decoder_cross_attn_noise_level_{noise_level}_layer_{layer}_head_{head_number}"
 
-                                        heatmaps[sequence_number][subtask].append(wandb.Image(cross_attn_weights_dec_head, caption=img_name, masks={"img_static": {"mask_data": img_static},
-                                                                                                                                                    "img_gripper": {"mask_data": img_gripper_resized}}))
-                                        
-                                        os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross", exist_ok=True)
-                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross/{img_name}.jpg", cross_attn_weights_dec_head)
-    
+                                            heatmaps[sequence_number][subtask].append(wandb.Image(cross_attn_weights_dec_head, caption=img_name, masks={"img_static": {"mask_data": img_static},
+                                                                                                                                                        "img_gripper": {"mask_data": img_gripper_resized}}))
+                                            
+                                            os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross", exist_ok=True)
+                                            cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross/{img_name}.jpg", cross_attn_weights_dec_head)
+
+                if save_gifs_not_jpgs:
+                    for layer, gif_frames in heatmap_gifs.items():
+                        for key in ["enc", "dec_self", "dec_cross"]:
+                            if key in gif_frames and len(gif_frames[key]) > 0:
+                                # reverse frame order for enc gifs as noise level increases instead of decreases
+                                if key == "enc":
+                                    gif_frames[key].reverse()
+
+                                gif_path = f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/"
+                                os.makedirs(gif_path, exist_ok=True)
+
+                                imageio.mimsave(f"{gif_path}/layer_{layer}_{key}.gif", gif_frames[key], duration=0.75, loop=0)
+
+                                heatmaps[sequence_number][subtask].append(
+                                    wandb.Video(f"{gif_path}/layer_{layer}_{key}.gif", caption=f"step-{step_number}_layer-{layer}_{key.replace('_', '-')}-attn", format="gif")
+                                )
+
+
     for sequence_number, heatmaps_sequence in enumerate(heatmaps):
+        num_zeros_heatmaps = max(len(str(len(heatmaps_sequence[subtask]))) for subtask in heatmaps_sequence.keys())
+        num_zeros_seqs = max(len(str(sequence_number)) for sequence_number in range(len(heatmaps)))
         for subtask in heatmaps_sequence.keys():
-            print(f"{len(heatmaps[sequence_number][subtask]):04} heatmaps for sequence {sequence_number} and subtask {subtask}")
+            if save_gifs_not_jpgs:
+                print(f"{len(heatmaps[sequence_number][subtask]):{num_zeros_heatmaps}} heatmap gifs for sequence {sequence_number:0{num_zeros_seqs}} and subtask {subtask}")
+            else:
+                print(f"{len(heatmaps[sequence_number][subtask]):{num_zeros_heatmaps}} heatmaps for sequence {sequence_number:0{num_zeros_seqs}} and subtask {subtask}")
     return heatmaps

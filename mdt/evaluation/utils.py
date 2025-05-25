@@ -20,7 +20,7 @@ import wandb
 from mdt.utils.utils import add_text, format_sftp_path
 
 
-ROOT_OUTPUT_PATH = "/home/troth/hiwi/mdt_policy/outputs"
+ROOT_OUTPUT_PATH = "/home/troth/code/hiwi/mdt_policy/outputs"
 ENC_RESIZE_SHAPE = (224, 224) # size of encoder input images
 DEC_SELF_RESIZE_SHAPE = (250, 250)
 DEC_CROSS_RESIZE_SHAPE = (100, 250) # preserves 4:10 aspect ratio

@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 import sys
 import time
+
+# Add calvin_env to path
+sys.path.append(str(Path(__file__).absolute().parents[2] / "calvin_env"))
 import calvin_env
 
 # This is for using the locally installed repo clone when using slurm

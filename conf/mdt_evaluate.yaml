@@ -11,7 +11,7 @@ eval_cfg_overwrite:
     voltron_cache: /home/troth/hiwi/mdt_policy/vcache
 
 ep_len: 360
-num_sequences: 4 # 1000
+num_sequences: 1000
 num_videos: 10
 lang_embeddings: null
 render: False
@@ -20,7 +20,7 @@ wandb:
   entity: thomas-roth-karlsruhe-institute-of-technology
 debug: False
 dataset_path: /home/troth/data/task_D_D
-train_folder: /home/troth/hiwi/mdt_policy/pretrained_models/CALVIN D/mdtv_3_d
+train_folder: /home/troth/hiwi/mdt_policy/pretrained_models/CALVIN_D/mdtv_3_d
 model_name: mdt_test
 device: 0
 sampler_type: ddim

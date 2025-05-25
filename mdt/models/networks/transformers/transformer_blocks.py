@@ -118,10 +118,10 @@ class Attention(nn.Module):
 
     def forward(self, x, context=None, custom_attn_mask=None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
-        att = None
+        attn = None
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        # if the context is not None we do cross-attention othberwise self=attention
+        # if the context is not None we do cross-attention othberwise self-attention
         # cross attention computes the query from x and the keys and values are from the context
         if context is not None:
             k = self.key(context).view(B, -1, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
@@ -142,23 +142,23 @@ class Attention(nn.Module):
             # efficient attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=custom_attn_mask, dropout_p=self.attn_dropout.p if self.training else 0, is_causal=self.causal)
             v_eye = torch.eye(k.size(-2)).to(k.device)
-            att = torch.nn.functional.scaled_dot_product_attention(q, k, v_eye, attn_mask=custom_attn_mask, dropout_p=self.attn_dropout.p if self.training else 0, is_causal=self.causal)
+            attn = torch.nn.functional.scaled_dot_product_attention(q, k, v_eye, attn_mask=custom_attn_mask, dropout_p=self.attn_dropout.p if self.training else 0, is_causal=self.causal)
         else:
             # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+            attn = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
             if self.causal:
                 if custom_attn_mask is not None:
-                    att = att.masked_fill(custom_attn_mask == 0, float('-inf'))
+                    attn = attn.masked_fill(custom_attn_mask == 0, float('-inf'))
                 else:
-                    att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+                    attn = attn.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+            attn = F.softmax(attn, dim=-1)
+            attn = self.attn_dropout(attn)
+            y = attn @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
-        return y, att
+        return y, attn
     
 
 class MLP(nn.Module):
@@ -300,18 +300,18 @@ class ConditionedBlock(Block):
                          bias=bias)
         self.adaLN_zero = AdaLNZero(film_cond_dim)
 
-    def forward(self, x, c, context=None, custom_attn_mask=None):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_zero(c)
+    def forward(self, x, condition, context=None, custom_attn_mask=None):
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_zero(condition)
         
         # Attention with modulation
         x_attn = self.ln_1(x)
         x_attn = modulate(x_attn, shift_msa, scale_msa)
-        x_attn, attn_weights = self.attn(x_attn, custom_attn_mask=custom_attn_mask)
+        x_attn, attn_self = self.attn(x_attn, custom_attn_mask=custom_attn_mask)
         x = x + gate_msa * x_attn
         
         # Cross attention if used
         if self.use_cross_attention and context is not None:
-            x_cross_attn, cross_attn_weights = self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
+            x_cross_attn, attn_cross = self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
             x += x_cross_attn
         
         # MLP with modulation
@@ -320,8 +320,8 @@ class ConditionedBlock(Block):
         x = x + gate_mlp * self.mlp(x_mlp)
         
         if self.use_cross_attention and context is not None:
-            return x, attn_weights, cross_attn_weights
-        return x, attn_weights
+            return x, attn_self, attn_cross
+        return x, attn_self
 
 class NoiseBlock(Block):
     """
@@ -587,10 +587,10 @@ class TransformerFiLMDecoder(nn.Module):
             )
         self.ln = LayerNorm(embed_dim, bias)
 
-    def forward(self, x, c, cond=None, custom_attn_mask=None):
+    def forward(self, x, condition, context=None, custom_attn_mask=None):
         attn_weights = []
         for layer in self.blocks:
-            x, attn_self, attn_cross = layer(x, c, cond, custom_attn_mask=custom_attn_mask)
+            x, attn_self, attn_cross = layer(x, condition, context, custom_attn_mask=custom_attn_mask)
             attn_weights.append({"self": attn_self, "cross": attn_cross})
         x = self.ln(x)
         return x, attn_weights

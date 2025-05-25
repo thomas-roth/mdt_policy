@@ -58,7 +58,7 @@ class GCDenoiser(nn.Module):
         """
         c_skip, c_out, c_in = [append_dims(x, action.ndim) for x in self.get_scalings(sigma)]
         noised_input = action + noise * append_dims(sigma, action.ndim)
-        model_output = self.inner_model(state, noised_input * c_in, goal, sigma, **kwargs)
+        model_output, attn_enc_dec = self.inner_model(state, noised_input * c_in, goal, sigma, **kwargs)
         target = (action - c_skip * noised_input) / c_out
         return (model_output - target).pow(2).flatten(1).mean(), model_output
 
@@ -77,8 +77,8 @@ class GCDenoiser(nn.Module):
             The output of the forward pass as well as the attention weights.
         """
         c_skip, c_out, c_in = [append_dims(x, action.ndim) for x in self.get_scalings(sigma)]
-        result, attn = self.inner_model(state, action * c_in, goal, sigma, **kwargs)
-        return result * c_out + action * c_skip, attn
+        result, attn_enc_dec = self.inner_model(state, action * c_in, goal, sigma, **kwargs)
+        return result * c_out + action * c_skip, attn_enc_dec
     
     def forward_context_only(self, state, action, goal, sigma, **kwargs):
         """
@@ -95,7 +95,8 @@ class GCDenoiser(nn.Module):
             The output of the forward pass.
         """
         c_skip, c_out, c_in = [append_dims(x, action.ndim) for x in self.get_scalings(sigma)]
-        return self.inner_model.forward_enc_only(state, action * c_in, goal, sigma, **kwargs)
+        result, attn_enc_dec = self.inner_model.forward_enc_only(state, action * c_in, goal, sigma, **kwargs)
+        return result
 
     def get_params(self):
         return self.inner_model.parameters()

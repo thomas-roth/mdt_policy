@@ -8,12 +8,12 @@ defaults:
 # /home/hk-project-robolear/ft4740/code/calvin_d_old/dataset/task_D_D
 # /hkfs/work/workspace/scratch/ft4740-play3/data/task_ABC_D
 # /hkfs/work/workspace/scratch/ft4740-play3/data/task_ABCD_D
-root_data_dir: /hkfs/work/workspace/scratch/ft4740-play3/data/task_ABCD_D
+root_data_dir: /home/troth/data/task_D_D
 lang_folder: lang_clip_resnet50 
 vis_clip_model_name: ViT-B/16 
 clip_lang_model_name: ViT-B/32
 
-log_dir: /home/hk-project-sustainebot/ft4740/code/mdt_policy/logs
+log_dir: /home/troth/hiwi/mdt_policy/logs
 slurm: false
 min_window_size: 21 # 21
 max_window_size: 50
@@ -37,8 +37,8 @@ window_sampling_strategy: 'geometric'
 num_tokens_voltron: 3
 num_workers: 12
 img_gen_frame_diff: 3 
-use_extracted_rel_actions: true
-benchmark_name: calvin_abcd # calvin_abcd  
+use_extracted_rel_actions: false
+benchmark_name: attvis_mdt_calvin_d
 
 
 trainer:
@@ -57,7 +57,7 @@ logger:
   group: mdt
   log_model: false
   project: ${benchmark_name} # calvin_vision
-  entity: bennoq
+  entity: thomas-roth-karlsruhe-institute-of-technology
   id: ???
 
 

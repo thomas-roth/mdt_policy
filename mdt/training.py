@@ -177,8 +177,12 @@ if __name__ == "__main__":
 
     os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
     print(torch.cuda.is_available())
     print(torch.cuda.device_count())
     os.environ["TOKENIZERS_PARALLELISM"] = 'True'
+
+    # Add calvin_env to path
+    sys.path.append(str(Path(__file__).absolute().parents[1] / "calvin_env"))
+
     train()

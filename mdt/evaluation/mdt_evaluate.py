@@ -19,7 +19,7 @@ import wandb
 import torch.distributed as dist
 
 from mdt.evaluation.multistep_sequences import get_sequences
-from mdt.evaluation.utils import get_default_beso_and_env, get_env_state_for_initial_condition, join_vis_lang, gen_heatmaps, gen_heatmaps
+from mdt.evaluation.utils import get_default_beso_and_env, get_env_state_for_initial_condition, join_vis_lang, gen_heatmaps
 from mdt.utils.utils import get_last_checkpoint
 from mdt.rollout.rollout_video import RolloutVideo
 
@@ -319,7 +319,7 @@ def main(cfg):
             log_dir = get_log_dir(cfg.train_folder)
             os.makedirs(log_dir / "wandb", exist_ok=False)
             run = wandb.init(
-                project='calvin_eval',
+                project='attvis_mdt_calvin_eval',
                 entity=cfg.wandb.entity,
                 group=cfg.model_name + cfg.sampler_type + '_' + str(cfg.num_sampling_steps) + '_steps_' + str(cfg.cond_lambda) + '_c_' + str(cfg.num_sequences) + '_rollouts_',
                 config=dict(cfg),

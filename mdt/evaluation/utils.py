@@ -362,6 +362,9 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
     latest_output_dir = max(output_dirs)
     heatmap_output_path = f"{latest_output_dir}/attvis"
 
+    input_tokens_enc = ["task", "cams1", "cams2", "cams3"] # 1 token for task instruction, 3 tokens for camera imgs (cannot be separated bc of attn in PerceiverResampler)
+    input_tokens_dec_self = [f"action{i}" for i in range(10)] # 10 action tokens
+
     heatmaps = [defaultdict(list) for _ in range(len(attn_weights_sequences))]
 
     for sequence_number, attn_weights_sequence in tqdm(enumerate(attn_weights_sequences), total=len(attn_weights_sequences), desc="Generating attn heatmaps for sequences"):
@@ -402,6 +405,7 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
 
                                 attn_weights_enc = cv2.resize(attn_weights_enc, ENC_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                 attn_weights_enc = cv2.applyColorMap(attn_weights_enc, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+                                attn_weights_enc = draw_token_labels_onto_heatmap(attn_weights_enc, input_tokens_enc, input_tokens_enc)
 
                                 if save_gifs_not_jpgs:
                                     heatmap_gifs[layer]["enc"].append(attn_weights_enc)
@@ -418,6 +422,7 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
                                 for head_number, attn_weights_enc_head in enumerate(attn_weights_enc):
                                     attn_weights_enc_head = cv2.resize(attn_weights_enc_head, ENC_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                     attn_weights_enc_head = cv2.applyColorMap(attn_weights_enc_head, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+                                    attn_weights_enc_head = draw_token_labels_onto_heatmap(attn_weights_enc_head, input_tokens_enc, input_tokens_enc)
 
                                     if save_gifs_not_jpgs:
                                         heatmap_gifs[layer]["enc"].append(attn_weights_enc_head)
@@ -446,6 +451,7 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
 
                                     self_attn_weights_dec = cv2.resize(self_attn_weights_dec, DEC_SELF_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                     self_attn_weights_dec = cv2.applyColorMap(self_attn_weights_dec, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
+                                    self_attn_weights_dec = draw_token_labels_onto_heatmap(self_attn_weights_dec, input_tokens_dec_self, input_tokens_dec_self)
 
                                     if save_gifs_not_jpgs:
                                         self_attn_weights_dec_rgb = cv2.cvtColor(self_attn_weights_dec, cv2.COLOR_BGR2RGB)
@@ -461,7 +467,8 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
                                     cross_attn_weights_dec = cross_attn_weights_dec[0].mean(axis=0).astype(np.uint8) # (Td, Te) = (10, 4)
 
                                     cross_attn_weights_dec = cv2.resize(cross_attn_weights_dec, DEC_CROSS_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
-                                    cross_attn_weights_dec = cv2.applyColorMap(cross_attn_weights_dec, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+                                    cross_attn_weights_dec = cv2.applyColorMap(cross_attn_weights_dec, cv2.COLORMAP_JET) # (H, W, C) = (250, 100, 3)
+                                    cross_attn_weights_dec = draw_token_labels_onto_heatmap(cross_attn_weights_dec, input_tokens_enc, input_tokens_dec_self)
 
                                     if save_gifs_not_jpgs:
                                         cross_attn_weights_dec_rgb = cv2.cvtColor(cross_attn_weights_dec, cv2.COLOR_BGR2RGB)
@@ -482,6 +489,7 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
                                     if gen_for_dec_self:
                                         self_attn_weights_dec = cv2.resize(self_attn_weights_dec, DEC_SELF_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
                                         self_attn_weights_dec_head = cv2.applyColorMap(self_attn_weights_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
+                                        self_attn_weights_dec_head = draw_token_labels_onto_heatmap(self_attn_weights_dec_head, input_tokens_dec_self, input_tokens_dec_self)
 
                                         if save_gifs_not_jpgs:
                                             self_attn_weights_dec_head_rgb = cv2.cvtColor(self_attn_weights_dec_head, cv2.COLOR_BGR2RGB)
@@ -496,7 +504,8 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
                                     
                                     if gen_for_dec_cross:
                                         cross_attn_weights_dec_head = cv2.resize(cross_attn_weights_dec_head, DEC_CROSS_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
-                                        cross_attn_weights_dec_head = cv2.applyColorMap(cross_attn_weights_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+                                        cross_attn_weights_dec_head = cv2.applyColorMap(cross_attn_weights_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (250, 100, 3)
+                                        cross_attn_weights_dec_head = draw_token_labels_onto_heatmap(cross_attn_weights_dec_head, input_tokens_enc, input_tokens_dec_self)
 
                                         if save_gifs_not_jpgs:
                                             cross_attn_weights_dec_head_rgb = cv2.cvtColor(cross_attn_weights_dec_head, cv2.COLOR_BGR2RGB)
@@ -537,3 +546,37 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
             else:
                 print(f"{len(heatmaps[sequence_number][subtask]):{num_zeros_heatmaps}} heatmaps for sequence {sequence_number:0{num_zeros_seqs}} and subtask {subtask}")
     return heatmaps
+
+
+def draw_token_labels_onto_heatmap(heatmap, x_labels, y_labels):
+    x_cell_height = 60
+    y_cell_width = 60
+    margin_heatmap_labels = 5
+    font_scale = 0.5
+    color = (0, 0, 0)
+    thickness = 1
+    
+    heatmap_height, heatmap_width = heatmap.shape[:2]
+
+    heatmap_canvas = np.ones((heatmap_height + y_cell_width + margin_heatmap_labels, heatmap_width + x_cell_height + margin_heatmap_labels, 3), dtype=np.uint8) * 255
+    heatmap_canvas[:heatmap_height, (y_cell_width + margin_heatmap_labels):] = heatmap # paste heatmap onto top right of canvas
+
+    heatmap_canvas_rotated = cv2.rotate(heatmap_canvas, cv2.ROTATE_90_CLOCKWISE) # x labels are written rotated s.t. they fit into canvas
+
+    x_cell_width = heatmap_width // len(x_labels)
+    x_cell_middle = x_cell_width // 2 + 5
+    for i, label in enumerate(x_labels):
+        x = max(0, x_cell_height - cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0][0]) # right align text w/ overflow protection
+        y = y_cell_width + margin_heatmap_labels + i * x_cell_width + x_cell_middle
+        cv2.putText(heatmap_canvas_rotated, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv2.LINE_AA)
+
+    heatmap_canvas = cv2.rotate(heatmap_canvas_rotated, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+    y_cell_height = heatmap_height // len(y_labels)
+    y_cell_middle = y_cell_height // 2 + 5
+    for i, label in enumerate(y_labels):
+        x = 0
+        y = i * y_cell_height + y_cell_middle
+        cv2.putText(heatmap_canvas, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv2.LINE_AA)
+    
+    return heatmap_canvas

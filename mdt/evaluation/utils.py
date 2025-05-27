@@ -362,8 +362,8 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
     latest_output_dir = max(output_dirs)
     heatmap_output_path = f"{latest_output_dir}/attvis"
 
-    input_tokens_enc = ["task", "cams1", "cams2", "cams3"] # 1 token for task instruction, 3 tokens for camera imgs (cannot be separated bc of attn in PerceiverResampler)
-    input_tokens_dec_self = [f"action{i}" for i in range(10)] # 10 action tokens
+    input_tokens_enc = ["task", "cams0", "cams1", "cams2"] # 1 token for task instruction, 3 tokens for camera imgs (cannot be separated bc of cross-attn in PerceiverResampler)
+    input_tokens_dec_self = [f"action{i}" for i in range(10)] # 10 tokens for prediction of next 10 actions
 
     heatmaps = [defaultdict(list) for _ in range(len(attn_weights_sequences))]
 
@@ -549,26 +549,27 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
 
 
 def draw_token_labels_onto_heatmap(heatmap, x_labels, y_labels):
-    x_cell_height = 60
-    y_cell_width = 60
-    margin_heatmap_labels = 5
+    font_face = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.5
     color = (0, 0, 0)
     thickness = 1
+    x_cell_height = max(cv2.getTextSize(x_label, font_face, font_scale, thickness)[0][0] for x_label in x_labels) # dynamic depending on longest x label
+    y_cell_width = max(cv2.getTextSize(y_label, font_face, font_scale, thickness)[0][0] for y_label in y_labels) # dynamic depending on longest y label
+    margin_heatmap_labels = 5 # no. of pixels between heatmap and labels
     
     heatmap_height, heatmap_width = heatmap.shape[:2]
 
-    heatmap_canvas = np.ones((heatmap_height + y_cell_width + margin_heatmap_labels, heatmap_width + x_cell_height + margin_heatmap_labels, 3), dtype=np.uint8) * 255
-    heatmap_canvas[:heatmap_height, (y_cell_width + margin_heatmap_labels):] = heatmap # paste heatmap onto top right of canvas
+    heatmap_canvas = np.ones((heatmap_height + x_cell_height + margin_heatmap_labels, heatmap_width + y_cell_width + margin_heatmap_labels, 3), dtype=np.uint8) * 255
+    heatmap_canvas[:heatmap_height, -heatmap_width:] = heatmap # paste heatmap onto top right of canvas
 
-    heatmap_canvas_rotated = cv2.rotate(heatmap_canvas, cv2.ROTATE_90_CLOCKWISE) # x labels are written rotated s.t. they fit into canvas
+    heatmap_canvas_rotated = cv2.rotate(heatmap_canvas, cv2.ROTATE_90_CLOCKWISE) # x labels are written rotated s.t. they fit onto canvas
 
     x_cell_width = heatmap_width // len(x_labels)
     x_cell_middle = x_cell_width // 2 + 5
     for i, label in enumerate(x_labels):
-        x = max(0, x_cell_height - cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0][0]) # right align text w/ overflow protection
+        x = max(0, x_cell_height - cv2.getTextSize(label, font_face, font_scale, thickness)[0][0]) # right align text w/ overflow protection
         y = y_cell_width + margin_heatmap_labels + i * x_cell_width + x_cell_middle
-        cv2.putText(heatmap_canvas_rotated, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv2.LINE_AA)
+        cv2.putText(heatmap_canvas_rotated, label, (x, y), font_face, font_scale, color, thickness, cv2.LINE_AA)
 
     heatmap_canvas = cv2.rotate(heatmap_canvas_rotated, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
@@ -577,6 +578,6 @@ def draw_token_labels_onto_heatmap(heatmap, x_labels, y_labels):
     for i, label in enumerate(y_labels):
         x = 0
         y = i * y_cell_height + y_cell_middle
-        cv2.putText(heatmap_canvas, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv2.LINE_AA)
+        cv2.putText(heatmap_canvas, label, (x, y), font_face, font_scale, color, thickness, cv2.LINE_AA)
     
     return heatmap_canvas

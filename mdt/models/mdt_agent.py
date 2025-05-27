@@ -299,7 +299,7 @@ class MDTAgent(pl.LightningModule):
             perceptual_emb, latent_goal, image_latent_goal = self.compute_input_embeddings(dataset_batch)
 
             # predict the next action sequence
-            action_pred, attns_batch = self.denoise_actions(
+            action_pred, attns_noise_levels = self.denoise_actions(
                 torch.zeros_like(latent_goal).to(latent_goal.device),
                 perceptual_emb,
                 latent_goal,
@@ -526,9 +526,9 @@ class MDTAgent(pl.LightningModule):
 
         x = torch.randn((len(latent_goal), self.act_window_size, 7), device=self.device) * self.sigma_max
 
-        actions, attns_batch = self.sample_loop(sigmas, x, input_state, latent_goal, latent_plan, self.sampler_type, extra_args)
+        actions, attns_noise_levels = self.sample_loop(sigmas, x, input_state, latent_goal, latent_plan, self.sampler_type, extra_args)
 
-        return actions, attns_batch
+        return actions, attns_noise_levels
 
     def make_sample_density(self):
         """ 
@@ -584,6 +584,7 @@ class MDTAgent(pl.LightningModule):
         """
         Main method to generate samples depending on the chosen sampler type. DDIM is the default as it works well in all settings.
         """
+        attns_noise_levels = None
         s_churn = extra_args['s_churn'] if 's_churn' in extra_args else 0
         s_min = extra_args['s_min'] if 's_min' in extra_args else 0
         use_scaler = extra_args['use_scaler'] if 'use_scaler' in extra_args else False
@@ -629,14 +630,14 @@ class MDTAgent(pl.LightningModule):
         elif sampler_type == 'dpmpp_2m_sde':
             x_0 = sample_dpmpp_sde(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
         elif sampler_type == 'ddim':
-            x_0, attns_batch = sample_ddim(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
+            x_0, attns_noise_levels = sample_ddim(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
         elif sampler_type == 'dpmpp_2s':
             x_0 = sample_dpmpp_2s(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
         elif sampler_type == 'dpmpp_2_with_lms':
             x_0 = sample_dpmpp_2_with_lms(self.model, state, x_t, goal, sigmas, scaler=scaler, disable=True)
         else:
             raise ValueError('desired sampler type not found!')
-        return x_0, attns_batch
+        return x_0, attns_noise_levels
     
     def get_noise_schedule(self, n_sampling_steps, noise_schedule_type):
         """
@@ -693,13 +694,13 @@ class MDTAgent(pl.LightningModule):
         perceptual_emb = self.embed_visual_obs(rgb_static, rgb_gripper)
         perceptual_emb['modality'] = modality
 
-        act_seq, attns_batch = self.denoise_actions(
+        act_seq, attns_noise_levels = self.denoise_actions(
             torch.zeros_like(latent_goal).to(latent_goal.device),
             perceptual_emb,
             latent_goal,
             inference=True,
         )
-        return act_seq, attns_batch
+        return act_seq, attns_noise_levels
 
     def step(self, obs, goal):
         """
@@ -714,10 +715,10 @@ class MDTAgent(pl.LightningModule):
         Returns:
             Predicted action.
         """
-        attns_batch = None
+        attns_noise_levels = None
 
         if self.rollout_step_counter % self.multistep == 0:
-            pred_action_seq, attns_batch = self(obs, goal)
+            pred_action_seq, attns_noise_levels = self(obs, goal)
 
             self.pred_action_seq = pred_action_seq  
             
@@ -728,7 +729,7 @@ class MDTAgent(pl.LightningModule):
         if self.rollout_step_counter == self.multistep:
             self.rollout_step_counter = 0
         
-        return current_action, attns_batch
+        return current_action, attns_noise_levels
     
     def on_train_start(self)-> None:
         

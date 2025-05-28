@@ -357,7 +357,7 @@ def get_env_state_for_initial_condition(initial_condition):
     return robot_obs, scene_obs
 
 
-def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True, gen_for_dec_self=True, gen_for_dec_cross=True, save_gifs_not_jpgs=True):
+def gen_heatmaps(attns_sequences, merge_attn_heads=True, gen_for_enc=False, gen_for_dec_self=True, gen_for_dec_cross=True, save_gifs_not_jpgs=True):
     output_dirs = [os.path.join(ROOT_OUTPUT_PATH, day, time) for day in os.listdir(ROOT_OUTPUT_PATH) for time in os.listdir(Path(ROOT_OUTPUT_PATH) / day)]
     latest_output_dir = max(output_dirs)
     heatmap_output_path = f"{latest_output_dir}/attvis"
@@ -365,159 +365,159 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
     input_tokens_enc = ["task", "cams0", "cams1", "cams2"] # 1 token for task instruction, 3 tokens for camera imgs (cannot be separated bc of cross-attn in PerceiverResampler)
     input_tokens_dec_self = [f"action{i}" for i in range(10)] # 10 tokens for prediction of next 10 actions
 
-    heatmaps = [defaultdict(list) for _ in range(len(attn_weights_sequences))]
+    heatmaps = [defaultdict(list) for _ in range(len(attns_sequences))]
 
-    for sequence_number, attn_weights_sequence in tqdm(enumerate(attn_weights_sequences), total=len(attn_weights_sequences), desc="Generating attn heatmaps for sequences"):
-        for attn_weights_task in tqdm(attn_weights_sequence, leave=False):
-            subtask = attn_weights_task["subtask"].replace(" ", "_")
+    for sequence_number, attns_sequence in tqdm(enumerate(attns_sequences), total=len(attns_sequences), desc="Generating attn heatmaps for sequences"):
+        for attns_task in tqdm(attns_sequence, leave=False):
+            subtask = attns_task["subtask"].replace(" ", "_")
 
-            for step_number, attn_weights_step_plus_model_input in enumerate(attn_weights_task["attns"]):
-                attn_weights_step = attn_weights_step_plus_model_input["attns"]
-                img_static = attn_weights_step_plus_model_input["img_static"][0][0].cpu().detach().numpy().transpose(1, 2, 0) # (H, W, C) = (224, 224, 3)
-                img_gripper = attn_weights_step_plus_model_input["img_gripper"][0][0].cpu().detach().numpy().transpose(1, 2, 0) # (H, W, C) = (84, 84, 3)
+            for step_number, attns_step_plus_model_input in enumerate(attns_task["attns"]):
+                attns_step = attns_step_plus_model_input["attns"]
+                img_static = attns_step_plus_model_input["img_static"][0][0].cpu().detach().numpy().transpose(1, 2, 0) # (H, W, C) = (224, 224, 3)
+                img_gripper = attns_step_plus_model_input["img_gripper"][0][0].cpu().detach().numpy().transpose(1, 2, 0) # (H, W, C) = (84, 84, 3)
 
                 img_static = cv2.cvtColor(img_static, cv2.COLOR_RGB2GRAY)
                 img_gripper = cv2.cvtColor(img_gripper, cv2.COLOR_RGB2GRAY)
                 img_gripper_resized = cv2.resize(img_gripper, (img_static.shape[0], img_static.shape[1]), interpolation=cv2.INTER_NEAREST)
 
-                if attn_weights_step is None:
+                if attns_step is None:
                     continue # skip if step action already predicted in previous step (multistep prediction) 
                 
                 if save_gifs_not_jpgs:
                     heatmap_gifs = defaultdict(lambda: defaultdict(list))
 
-                for noise_level_inv, attn_weights_noise_level in enumerate(attn_weights_step):
-                    noise_level = len(attn_weights_step) - noise_level_inv - 1
+                for noise_level_inv, attns_noise_level in enumerate(attns_step):
+                    noise_level = len(attns_step) - noise_level_inv - 1
 
-                    attn_weights_noise_level_enc = attn_weights_noise_level["enc"]
-                    attn_weights_noise_level_dec = attn_weights_noise_level["dec"]
+                    attns_noise_level_enc = attns_noise_level["enc"]
+                    attns_noise_level_dec = attns_noise_level["dec"]
 
                     if gen_for_enc:
-                        for layer, attn_weights_enc in enumerate(attn_weights_noise_level_enc):
-                            attn_weights_enc = attn_weights_enc.cpu().detach().numpy() # (B, nh, Te, Te) = (1, 8, 4, 4)
+                        for layer, attns_enc in enumerate(attns_noise_level_enc):
+                            attns_enc = attns_enc.cpu().detach().numpy() # (B, nh, Te, Te) = (1, 8, 4, 4)
 
                             # normalize attention weights
-                            attn_weights_enc = (attn_weights_enc - attn_weights_enc.min()) / (attn_weights_enc.max() - attn_weights_enc.min())
-                            attn_weights_enc = (attn_weights_enc * 255)
+                            attns_enc = (attns_enc - attns_enc.min()) / (attns_enc.max() - attns_enc.min())
+                            attns_enc = (attns_enc * 255)
                             
                             if merge_attn_heads:
-                                attn_weights_enc = attn_weights_enc[0].mean(axis=0).astype(np.uint8) # (Te, Te) = (4, 4)
+                                attns_enc = attns_enc[0].mean(axis=0).astype(np.uint8) # (Te, Te) = (4, 4)
 
-                                attn_weights_enc = cv2.resize(attn_weights_enc, ENC_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
-                                attn_weights_enc = cv2.applyColorMap(attn_weights_enc, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
-                                attn_weights_enc = draw_token_labels_onto_heatmap(attn_weights_enc, input_tokens_enc, input_tokens_enc)
+                                attns_enc = cv2.resize(attns_enc, ENC_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
+                                attns_enc = cv2.applyColorMap(attns_enc, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+                                attns_enc = draw_token_labels_onto_heatmap(attns_enc, input_tokens_enc, input_tokens_enc)
 
                                 if save_gifs_not_jpgs:
-                                    heatmap_gifs[layer]["enc"].append(attn_weights_enc)
+                                    heatmap_gifs[layer]["enc"].append(attns_enc)
                                 else:
                                     img_name = f"encoder_noise_level_{noise_level}_layer_{layer}_merged_heads"
 
-                                    heatmaps[sequence_number][subtask].append(wandb.Image(attn_weights_enc, caption=img_name, masks={"img_static": {"mask_data": img_static}}))
+                                    heatmaps[sequence_number][subtask].append(wandb.Image(attns_enc, caption=img_name, masks={"img_static": {"mask_data": img_static}}))
 
                                     os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc", exist_ok=True)
-                                    cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc/{img_name}.jpg", attn_weights_enc)
+                                    cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc/{img_name}.jpg", attns_enc)
                             else:
-                                attn_weights_enc = attn_weights_enc[0].astype(np.uint8) # (nh, Te, Te) = (8, 4, 4)
+                                attns_enc = attns_enc[0].astype(np.uint8) # (nh, Te, Te) = (8, 4, 4)
 
-                                for head_number, attn_weights_enc_head in enumerate(attn_weights_enc):
-                                    attn_weights_enc_head = cv2.resize(attn_weights_enc_head, ENC_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
-                                    attn_weights_enc_head = cv2.applyColorMap(attn_weights_enc_head, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
-                                    attn_weights_enc_head = draw_token_labels_onto_heatmap(attn_weights_enc_head, input_tokens_enc, input_tokens_enc)
+                                for head_number, attns_enc_head in enumerate(attns_enc):
+                                    attns_enc_head = cv2.resize(attns_enc_head, ENC_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
+                                    attns_enc_head = cv2.applyColorMap(attns_enc_head, cv2.COLORMAP_JET) # (H, W, C) = (224, 224, 3)
+                                    attns_enc_head = draw_token_labels_onto_heatmap(attns_enc_head, input_tokens_enc, input_tokens_enc)
 
                                     if save_gifs_not_jpgs:
-                                        heatmap_gifs[layer]["enc"].append(attn_weights_enc_head)
+                                        heatmap_gifs[layer]["enc"].append(attns_enc_head)
                                     else:
                                         img_name = f"encoder_noise_level_{noise_level}_layer_{layer}_head_{head_number}"
                                         
-                                        heatmaps[sequence_number][subtask].append(wandb.Image(attn_weights_enc_head, caption=img_name, masks={"img_static": {"mask_data": img_static}}))
+                                        heatmaps[sequence_number][subtask].append(wandb.Image(attns_enc_head, caption=img_name, masks={"img_static": {"mask_data": img_static}}))
                                         
                                         os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc", exist_ok=True)
-                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc/{img_name}.jpg", attn_weights_enc_head)
+                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/enc/{img_name}.jpg", attns_enc_head)
                     
                     if gen_for_dec_self or gen_for_dec_cross:
-                        for layer, attn_weights_dec in enumerate(attn_weights_noise_level_dec):
-                            self_attn_weights_dec = attn_weights_dec["self"].cpu().detach().numpy() # (B, nh, Td, Td) = (1, 8, 10, 10)
-                            cross_attn_weights_dec = attn_weights_dec["cross"].cpu().detach().numpy() # (B, nh, Td, Te) = (1, 8, 10, 4)
+                        for layer, attns_dec in enumerate(attns_noise_level_dec):
+                            self_attns_dec = attns_dec["self"].cpu().detach().numpy() # (B, nh, Td, Td) = (1, 8, 10, 10)
+                            cross_attns_dec = attns_dec["cross"].cpu().detach().numpy() # (B, nh, Td, Te) = (1, 8, 10, 4)
 
                             # normalize attention weights
-                            self_attn_weights_dec = (self_attn_weights_dec - self_attn_weights_dec.min()) / (self_attn_weights_dec.max() - self_attn_weights_dec.min())
-                            self_attn_weights_dec = (self_attn_weights_dec * 255)
-                            cross_attn_weights_dec = (cross_attn_weights_dec - cross_attn_weights_dec.min()) / (cross_attn_weights_dec.max() - cross_attn_weights_dec.min())
-                            cross_attn_weights_dec = (cross_attn_weights_dec * 255)
+                            self_attns_dec = (self_attns_dec - self_attns_dec.min()) / (self_attns_dec.max() - self_attns_dec.min())
+                            self_attns_dec = (self_attns_dec * 255)
+                            cross_attns_dec = (cross_attns_dec - cross_attns_dec.min()) / (cross_attns_dec.max() - cross_attns_dec.min())
+                            cross_attns_dec = (cross_attns_dec * 255)
 
                             if merge_attn_heads:
                                 if gen_for_dec_self:
-                                    self_attn_weights_dec = self_attn_weights_dec[0].mean(axis=0).astype(np.uint8) # (Td, Td) = (10, 10)
+                                    self_attns_dec = self_attns_dec[0].mean(axis=0).astype(np.uint8) # (Td, Td) = (10, 10)
 
-                                    self_attn_weights_dec = cv2.resize(self_attn_weights_dec, DEC_SELF_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
-                                    self_attn_weights_dec = cv2.applyColorMap(self_attn_weights_dec, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
-                                    self_attn_weights_dec = draw_token_labels_onto_heatmap(self_attn_weights_dec, input_tokens_dec_self, input_tokens_dec_self)
+                                    self_attns_dec = cv2.resize(self_attns_dec, DEC_SELF_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
+                                    self_attns_dec = cv2.applyColorMap(self_attns_dec, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
+                                    self_attns_dec = draw_token_labels_onto_heatmap(self_attns_dec, input_tokens_dec_self, input_tokens_dec_self)
 
                                     if save_gifs_not_jpgs:
-                                        self_attn_weights_dec_rgb = cv2.cvtColor(self_attn_weights_dec, cv2.COLOR_BGR2RGB)
-                                        heatmap_gifs[layer]["dec_self"].append(self_attn_weights_dec_rgb)
+                                        self_attns_dec_rgb = cv2.cvtColor(self_attns_dec, cv2.COLOR_BGR2RGB)
+                                        heatmap_gifs[layer]["dec_self"].append(self_attns_dec_rgb)
                                     else:
                                         img_name = f"decoder_self_attn_noise_level_{noise_level}_layer_{layer}_merged_heads"
 
-                                        heatmaps[sequence_number][subtask].append(wandb.Image(self_attn_weights_dec, caption=img_name)) # mask: encoder output ("context" in mdtv_transformer.forward())
+                                        heatmaps[sequence_number][subtask].append(wandb.Image(self_attns_dec, caption=img_name)) # mask: encoder output ("context" in mdtv_transformer.forward())
                                         
                                         os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self", exist_ok=True)
-                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self/{img_name}.jpg", self_attn_weights_dec)
+                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self/{img_name}.jpg", self_attns_dec)
                                 if gen_for_dec_cross:
-                                    cross_attn_weights_dec = cross_attn_weights_dec[0].mean(axis=0).astype(np.uint8) # (Td, Te) = (10, 4)
+                                    cross_attns_dec = cross_attns_dec[0].mean(axis=0).astype(np.uint8) # (Td, Te) = (10, 4)
 
-                                    cross_attn_weights_dec = cv2.resize(cross_attn_weights_dec, DEC_CROSS_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
-                                    cross_attn_weights_dec = cv2.applyColorMap(cross_attn_weights_dec, cv2.COLORMAP_JET) # (H, W, C) = (250, 100, 3)
-                                    cross_attn_weights_dec = draw_token_labels_onto_heatmap(cross_attn_weights_dec, input_tokens_enc, input_tokens_dec_self)
+                                    cross_attns_dec = cv2.resize(cross_attns_dec, DEC_CROSS_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
+                                    cross_attns_dec = cv2.applyColorMap(cross_attns_dec, cv2.COLORMAP_JET) # (H, W, C) = (250, 100, 3)
+                                    cross_attns_dec = draw_token_labels_onto_heatmap(cross_attns_dec, input_tokens_enc, input_tokens_dec_self)
 
                                     if save_gifs_not_jpgs:
-                                        cross_attn_weights_dec_rgb = cv2.cvtColor(cross_attn_weights_dec, cv2.COLOR_BGR2RGB)
-                                        heatmap_gifs[layer]["dec_cross"].append(cross_attn_weights_dec_rgb)
+                                        cross_attns_dec_rgb = cv2.cvtColor(cross_attns_dec, cv2.COLOR_BGR2RGB)
+                                        heatmap_gifs[layer]["dec_cross"].append(cross_attns_dec_rgb)
                                     else:
                                         img_name = f"decoder_cross_attn_noise_level_{noise_level}_layer_{layer}_merged_heads"
 
-                                        heatmaps[sequence_number][subtask].append(wandb.Image(cross_attn_weights_dec, caption=img_name, masks={"img_static": {"mask_data": img_static},
+                                        heatmaps[sequence_number][subtask].append(wandb.Image(cross_attns_dec, caption=img_name, masks={"img_static": {"mask_data": img_static},
                                                                                                                                             "img_gripper": {"mask_data": img_gripper_resized}}))
                                         
                                         os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross", exist_ok=True)
-                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross/{img_name}.jpg", cross_attn_weights_dec)
+                                        cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross/{img_name}.jpg", cross_attns_dec)
                             else:
-                                self_attn_weights_dec = self_attn_weights_dec[0].astype(np.uint8) # (nh, Td, Td) = (8, 10, 10)
-                                cross_attn_weights_dec = cross_attn_weights_dec[0].astype(np.uint8) # (nh, Td, Te) = (8, 10, 4)
+                                self_attns_dec = self_attns_dec[0].astype(np.uint8) # (nh, Td, Td) = (8, 10, 10)
+                                cross_attns_dec = cross_attns_dec[0].astype(np.uint8) # (nh, Td, Te) = (8, 10, 4)
 
-                                for head_number, (self_attn_weights_dec_head, cross_attn_weights_dec_head) in enumerate(zip(self_attn_weights_dec, cross_attn_weights_dec)):
+                                for head_number, (self_attns_dec_head, cross_attns_dec_head) in enumerate(zip(self_attns_dec, cross_attns_dec)):
                                     if gen_for_dec_self:
-                                        self_attn_weights_dec = cv2.resize(self_attn_weights_dec, DEC_SELF_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
-                                        self_attn_weights_dec_head = cv2.applyColorMap(self_attn_weights_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
-                                        self_attn_weights_dec_head = draw_token_labels_onto_heatmap(self_attn_weights_dec_head, input_tokens_dec_self, input_tokens_dec_self)
+                                        self_attns_dec_head = cv2.resize(self_attns_dec, DEC_SELF_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
+                                        self_attns_dec_head = cv2.applyColorMap(self_attns_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (250, 250, 3)
+                                        self_attns_dec_head = draw_token_labels_onto_heatmap(self_attns_dec_head, input_tokens_dec_self, input_tokens_dec_self)
 
                                         if save_gifs_not_jpgs:
-                                            self_attn_weights_dec_head_rgb = cv2.cvtColor(self_attn_weights_dec_head, cv2.COLOR_BGR2RGB)
-                                            heatmap_gifs[layer]["dec_self"].append(self_attn_weights_dec_head_rgb)
+                                            self_attns_dec_head_rgb = cv2.cvtColor(self_attns_dec_head, cv2.COLOR_BGR2RGB)
+                                            heatmap_gifs[layer]["dec_self"].append(self_attns_dec_head_rgb)
                                         else:
                                             img_name = f"decoder_self_attn_noise_level_{noise_level}_layer_{layer}_head_{head_number}"
 
-                                            heatmaps[sequence_number][subtask].append(wandb.Image(self_attn_weights_dec_head, caption=img_name))
+                                            heatmaps[sequence_number][subtask].append(wandb.Image(self_attns_dec_head, caption=img_name))
 
                                             os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self", exist_ok=True)
-                                            cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self/{img_name}.jpg", self_attn_weights_dec_head)
+                                            cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_self/{img_name}.jpg", self_attns_dec_head)
                                     
                                     if gen_for_dec_cross:
-                                        cross_attn_weights_dec_head = cv2.resize(cross_attn_weights_dec_head, DEC_CROSS_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
-                                        cross_attn_weights_dec_head = cv2.applyColorMap(cross_attn_weights_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (250, 100, 3)
-                                        cross_attn_weights_dec_head = draw_token_labels_onto_heatmap(cross_attn_weights_dec_head, input_tokens_enc, input_tokens_dec_self)
+                                        cross_attns_dec_head = cv2.resize(cross_attns_dec_head, DEC_CROSS_RESIZE_SHAPE, interpolation=cv2.INTER_NEAREST)
+                                        cross_attns_dec_head = cv2.applyColorMap(cross_attns_dec_head, cv2.COLORMAP_JET) # (H, W, C) = (250, 100, 3)
+                                        cross_attns_dec_head = draw_token_labels_onto_heatmap(cross_attns_dec_head, input_tokens_enc, input_tokens_dec_self)
 
                                         if save_gifs_not_jpgs:
-                                            cross_attn_weights_dec_head_rgb = cv2.cvtColor(cross_attn_weights_dec_head, cv2.COLOR_BGR2RGB)
-                                            heatmap_gifs[layer]["dec_cross"].append(cross_attn_weights_dec_head_rgb)
+                                            cross_attns_dec_head_rgb = cv2.cvtColor(cross_attns_dec_head, cv2.COLOR_BGR2RGB)
+                                            heatmap_gifs[layer]["dec_cross"].append(cross_attns_dec_head_rgb)
                                         else:
                                             img_name = f"decoder_cross_attn_noise_level_{noise_level}_layer_{layer}_head_{head_number}"
 
-                                            heatmaps[sequence_number][subtask].append(wandb.Image(cross_attn_weights_dec_head, caption=img_name, masks={"img_static": {"mask_data": img_static},
+                                            heatmaps[sequence_number][subtask].append(wandb.Image(cross_attns_dec_head, caption=img_name, masks={"img_static": {"mask_data": img_static},
                                                                                                                                                         "img_gripper": {"mask_data": img_gripper_resized}}))
                                             
                                             os.makedirs(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross", exist_ok=True)
-                                            cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross/{img_name}.jpg", cross_attn_weights_dec_head)
+                                            cv2.imwrite(f"{heatmap_output_path}/seq_{sequence_number}/step_{step_number}/layer_{layer}/dec_cross/{img_name}.jpg", cross_attns_dec_head)
 
                 if save_gifs_not_jpgs:
                     for layer, gif_frames in heatmap_gifs.items():
@@ -545,6 +545,7 @@ def gen_heatmaps(attn_weights_sequences, merge_attn_heads=True, gen_for_enc=True
                 print(f"{len(heatmaps[sequence_number][subtask]):{num_zeros_heatmaps}} heatmap gifs for sequence {sequence_number:0{num_zeros_seqs}} and subtask {subtask}")
             else:
                 print(f"{len(heatmaps[sequence_number][subtask]):{num_zeros_heatmaps}} heatmaps for sequence {sequence_number:0{num_zeros_seqs}} and subtask {subtask}")
+    
     return heatmaps
 
 

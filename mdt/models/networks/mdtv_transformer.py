@@ -206,10 +206,10 @@ class MDTVTransformer(nn.Module):
             torch.nn.init.normal_(module.pos_emb, mean=0.0, std=0.02)
 
     def forward(self, states, actions, goals, sigma, uncond: Optional[bool] = False):
-        context, attn_weights_enc = self.forward_enc_only(states, actions, goals, sigma, uncond)
-        pred_actions, attn_weights_dec = self.forward_dec_only(context, actions, sigma)
-        attn_weights = {"enc": attn_weights_enc, "dec": attn_weights_dec}
-        return pred_actions, attn_weights
+        context, attns_enc = self.forward_enc_only(states, actions, goals, sigma, uncond)
+        pred_actions, attns_dec = self.forward_dec_only(context, actions, sigma)
+        attns_enc_dec = {"enc": attns_enc, "dec": attns_dec}
+        return pred_actions, attns_enc_dec
 
     def forward_enc_only(self, states, actions=None, goals=None, sigma=None, uncond: Optional[bool] = False):
         emb_t = self.process_sigma_embeddings(sigma) if not self.use_ada_conditioning else None
@@ -218,23 +218,23 @@ class MDTVTransformer(nn.Module):
         goal_embed = self.process_goal_embeddings(goals, states)
 
         input_seq = self.concatenate_inputs(emb_t, goal_embed, state_embed, proprio_embed, uncond)
-        context, attn_weights_enc = self.encoder(input_seq)
+        context, attns_enc = self.encoder(input_seq)
         self.latent_encoder_emb = context
-        return context, attn_weights_enc
+        return context, attns_enc
 
     def forward_dec_only(self, context, actions, sigma):
         emb_t = self.process_sigma_embeddings(sigma)
         action_embed = self.action_emb(actions)
         action_x = self.drop(action_embed)
 
-
         if self.use_ada_conditioning:
-            x, attn_weights_dec = self.decoder(action_x, emb_t, context)
+            x, attns_dec = self.decoder(action_x, emb_t, context)
         else:
-            x, attn_weights_dec = self.decoder(action_x, context)
+            x, attns_dec = self.decoder(action_x, context)
 
         pred_actions = self.action_pred(x)
-        return pred_actions, attn_weights_dec
+        
+        return pred_actions, attns_dec
 
     def process_sigma_embeddings(self, sigma):
         sigmas = sigma.log() / 4

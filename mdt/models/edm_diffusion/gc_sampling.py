@@ -943,8 +943,8 @@ def sample_ddim(
 
     for i in trange(len(sigmas) - 1, disable=disable):
         # predict the next action
-        denoised, attn_enc_dec = model(state, action, goal, sigmas[i] * s_in, **extra_args)
-        attns_noise_levels.append(attn_enc_dec)
+        denoised, attns_enc_dec = model(state, action, goal, sigmas[i] * s_in, **extra_args)
+        attns_noise_levels.append(attns_enc_dec)
         if callback is not None:
             callback({'action': action, 'i': i, 'sigma': sigmas[i], 'sigma_hat': sigmas[i], 'denoised': denoised})
         t, t_next = t_fn(sigmas[i]), t_fn(sigmas[i + 1])

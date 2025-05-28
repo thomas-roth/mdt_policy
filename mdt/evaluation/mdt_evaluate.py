@@ -60,7 +60,7 @@ def count_success(results):
     return step_success
 
 
-def print_and_save(total_results, plan_dicts, attn_weights_sequences, cfg, log_dir=None):
+def print_and_save(cfg, total_results, plan_dicts, attns_sequences, log_dir=None):
     if log_dir is None:
         log_dir = get_log_dir(cfg.train_folder)
 
@@ -114,7 +114,7 @@ def print_and_save(total_results, plan_dicts, attn_weights_sequences, cfg, log_d
     if cfg.visualize_attention:
         print()
 
-        heatmaps = gen_heatmaps(attn_weights_sequences, cfg.merge_attn_heads, gen_for_enc=False, gen_for_dec_self=True, gen_for_dec_cross=True)
+        heatmaps = gen_heatmaps(attns_sequences, cfg.merge_attn_heads)
         for sequence_number, heatmaps_sequence in tqdm(enumerate(heatmaps), total=len(heatmaps), desc="Uploading heatmaps to wandb"):
             i = 0
             num_zeros_prepend = len(str(len(heatmaps_sequence)))
@@ -142,26 +142,20 @@ def evaluate_policy(model, env, lang_embeddings, cfg, num_videos=0, save_dir=Non
     eval_sequences = get_sequences(cfg.num_sequences)
 
     results = []
+    attns_sequences = []
     plans = defaultdict(list)
 
     if not cfg.debug:
         eval_sequences = tqdm(eval_sequences, position=0, leave=True)
-
-    if cfg.visualize_attention:
-        attn_weights_sequences = []
     
     for i, (initial_state, eval_sequence) in enumerate(eval_sequences):
         record = i < num_videos
-        if cfg.visualize_attention:
-            result, attn_weights_sequence = evaluate_sequence(
-                env, model, task_oracle, initial_state, eval_sequence, lang_embeddings, val_annotations, cfg, record, rollout_video, i
-            )
-            attn_weights_sequences.append(attn_weights_sequence)
-        else:
-            result = evaluate_sequence(
-                env, model, task_oracle, initial_state, eval_sequence, lang_embeddings, val_annotations, cfg, record, rollout_video, i
-            )
+        result, attns_sequence = evaluate_sequence(
+            env, model, task_oracle, initial_state, eval_sequence, lang_embeddings, val_annotations, cfg, record, rollout_video, i
+        )
         results.append(result)
+        attns_sequences.append(attns_sequence)
+        
         if record:
             rollout_video.write_to_tmp()
         if not cfg.debug:
@@ -175,10 +169,7 @@ def evaluate_policy(model, env, lang_embeddings, cfg, num_videos=0, save_dir=Non
         # log rollout videos
         rollout_video._log_videos_to_file(0, save_as_video=False)
 
-    if cfg.visualize_attention:
-        return results, plans, attn_weights_sequences
-    else:
-        return results, plans
+    return results, plans, attns_sequences
 
 
 def evaluate_sequence(
@@ -197,32 +188,25 @@ def evaluate_sequence(
         print(f"Evaluating sequence: {' -> '.join(eval_sequence)}")
         print("Subtask: ", end="")
     
-    if cfg.visualize_attention:
-        attn_weights_sequence = []
+    attns_sequence = []
     
     for subtask in eval_sequence:
         if record:
             rollout_video.new_subtask()
         
+        success, attns_task = rollout(env, model, task_checker, cfg, subtask, lang_embeddings, val_annotations, record, rollout_video)
         if cfg.visualize_attention:
-            success, attn_weights_task = rollout(env, model, task_checker, cfg, subtask, lang_embeddings, val_annotations, record, rollout_video)
-            attn_weights_sequence.append({"subtask": subtask, "attns": attn_weights_task})
-        else:
-            success = rollout(env, model, task_checker, cfg, subtask, lang_embeddings, val_annotations, record, rollout_video)
-        
+            attns_sequence.append({"subtask": subtask, "attns": attns_task})
+
         if record:
             rollout_video.draw_outcome(success)
         
         if success:
             success_counter += 1
         else:
-            if cfg.visualize_attention:
-                return success_counter, attn_weights_sequence
-            return success_counter
+            return success_counter, attns_sequence
     
-    if cfg.visualize_attention:
-        return success_counter, attn_weights_sequence
-    return success_counter
+    return success_counter, attns_sequence
 
 
 def rollout(env, model, task_oracle, cfg, subtask, lang_embeddings, val_annotations, record=False, rollout_video=None):
@@ -237,16 +221,12 @@ def rollout(env, model, task_oracle, cfg, subtask, lang_embeddings, val_annotati
     goal['lang_text'] = val_annotations[subtask][0]
     model.reset()
     start_info = env.get_info()
-
-    if cfg.visualize_attention:
-        attn_weights_task = []
+    attns_task = []
 
     for step in range(cfg.ep_len):
+        action, attns_step = model.step(obs, goal)
         if cfg.visualize_attention:
-            action, attn_weights_step = model.step(obs, goal)
-            attn_weights_task.append({"attns": attn_weights_step, "img_static": obs["rgb_obs"]["rgb_static"], "img_gripper": obs["rgb_obs"]["rgb_gripper"]})
-        else:
-            action, _ = model.step(obs, goal)
+            attns_task.append({"attns": attns_step, "img_static": obs["rgb_obs"]["rgb_static"], "img_gripper": obs["rgb_obs"]["rgb_gripper"]})
         
         obs, _, _, current_info = env.step(action)
         if cfg.debug:
@@ -265,16 +245,12 @@ def rollout(env, model, task_oracle, cfg, subtask, lang_embeddings, val_annotati
             if record:
                 rollout_video.add_language_instruction(lang_annotation)
             
-            if cfg.visualize_attention:
-                return True, attn_weights_task
-            return True
+            return True, attns_task
     if cfg.debug:
         print(colored("fail", "red"), end=" ")
     if record:
         rollout_video.add_language_instruction(lang_annotation)
-    if cfg.visualize_attention:
-        return False, attn_weights_task
-    return False
+    return False, attns_task
 
 
 @hydra.main(config_path="../../conf", config_name="mdt_evaluate")
@@ -288,8 +264,7 @@ def main(cfg):
     env = None
     results = {}
     plans = {}
-    if cfg.visualize_attention:
-        attn_weights_sequences = {}
+    attns_sequences = {}
 
     for checkpoint in checkpoints:
         print(cfg.device)
@@ -329,12 +304,11 @@ def main(cfg):
                 dir=log_dir / "wandb",
             )
 
+            results[checkpoint], plans[checkpoint], attns_sequences[checkpoint] = evaluate_policy(model, env, lang_embeddings, cfg, num_videos=cfg.num_videos, save_dir=Path(log_dir))
             if cfg.visualize_attention:
-                results[checkpoint], plans[checkpoint], attn_weights_sequences[checkpoint] = evaluate_policy(model, env, lang_embeddings, cfg, num_videos=cfg.num_videos, save_dir=Path(log_dir))
-                print_and_save(results, plans, attn_weights_sequences[checkpoint], cfg, log_dir)
+                print_and_save(cfg, results, plans, attns_sequences[checkpoint], log_dir)
             else:
-                results[checkpoint], plans[checkpoint] = evaluate_policy(model, env, lang_embeddings, cfg, num_videos=cfg.num_videos, save_dir=Path(log_dir))
-                print_and_save(results, plans, None, cfg, log_dir=log_dir)
+                print_and_save(cfg, results, plans, log_dir=log_dir)
 
             run.finish()
 

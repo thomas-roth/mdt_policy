@@ -210,18 +210,18 @@ class Block(nn.Module):
         self.mlp = MLP(n_embd, bias, mlp_pdrop)
 
     def forward(self, x, context=None, custom_attn_mask=None):
-        x_attn, attn_weights = self.attn(self.ln_1(x), custom_attn_mask=custom_attn_mask)
-        x = x + x_attn
+        x_attn, self_attn = self.attn(self.ln_1(x), custom_attn_mask=custom_attn_mask)
+        x += x_attn
 
         if self.use_cross_attention and context is not None:
-            x_cross_attn, cross_attn_weights = self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
+            x_cross_attn, cross_attn = self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
             x += x_cross_attn
 
         x = x + self.mlp(self.ln_2(x))
 
         if self.use_cross_attention and context is not None:
-            return x, attn_weights, cross_attn_weights
-        return x, attn_weights
+            return x, (self_attn, cross_attn)
+        return x, (self_attn,)
 
 
 
@@ -306,12 +306,12 @@ class ConditionedBlock(Block):
         # Attention with modulation
         x_attn = self.ln_1(x)
         x_attn = modulate(x_attn, shift_msa, scale_msa)
-        x_attn, attn_self = self.attn(x_attn, custom_attn_mask=custom_attn_mask)
+        x_attn, self_attn = self.attn(x_attn, custom_attn_mask=custom_attn_mask)
         x = x + gate_msa * x_attn
         
         # Cross attention if used
         if self.use_cross_attention and context is not None:
-            x_cross_attn, attn_cross = self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
+            x_cross_attn, cross_attn = self.cross_att(self.ln3(x), context, custom_attn_mask=custom_attn_mask)
             x += x_cross_attn
         
         # MLP with modulation
@@ -320,8 +320,8 @@ class ConditionedBlock(Block):
         x = x + gate_mlp * self.mlp(x_mlp)
         
         if self.use_cross_attention and context is not None:
-            return x, attn_self, attn_cross
-        return x, attn_self
+            return x, (self_attn, cross_attn)
+        return x, (self_attn,)
 
 class NoiseBlock(Block):
     """
@@ -348,18 +348,18 @@ class NoiseBlock(Block):
                          bias=bias)
 
     def forward(self, x, c, context=None, custom_attn_mask=None):
-        x_attn, attn_weights = self.attn(self.ln_1(x), custom_attn_mask=custom_attn_mask)
+        x_attn, self_attn = self.attn(self.ln_1(x), custom_attn_mask=custom_attn_mask)
         x += x_attn
 
         if self.use_cross_attention and context is not None:
-            x_cross_attn, cross_attn_weights = self.cross_att(self.ln3(x) + c, context, custom_attn_mask=custom_attn_mask)
+            x_cross_attn, cross_attn = self.cross_att(self.ln3(x) + c, context, custom_attn_mask=custom_attn_mask)
             x += x_cross_attn
         
         x = x + self.mlp(self.ln_2(x))
 
         if self.use_cross_attention and context is not None:
-            return x, attn_weights, cross_attn_weights
-        return x, attn_weights
+            return x, (self_attn, cross_attn)
+        return x, (self_attn,)
     
 
 class TransformerEncoder(nn.Module):
@@ -395,12 +395,12 @@ class TransformerEncoder(nn.Module):
         self.ln = LayerNorm(embed_dim, bias)
 
     def forward(self, x, custom_attn_mask=None):
-        attn_weights = []
+        attns_enc = []
         for layer in self.blocks:
-            x, attn = layer(x, custom_attn_mask=custom_attn_mask)
-            attn_weights.append(attn)
+            x, attns_layer = layer(x, custom_attn_mask=custom_attn_mask)
+            attns_enc.append(attns_layer)
         x = self.ln(x)
-        return x, attn_weights
+        return x, attns_enc
     
     
 class TransformerEncoderInterleaved(nn.Module):
@@ -521,13 +521,16 @@ class TransformerDecoder(nn.Module):
         )
         self.ln = LayerNorm(embed_dim, bias)
 
-    def forward(self, x, cond=None, custom_attn_mask=None):
-        attn_weights = []
+    def forward(self, x, condition=None, custom_attn_mask=None):
+        attns_dec = []
         for layer in self.blocks:
-            x, attn = layer(x, cond, custom_attn_mask=custom_attn_mask)
-            attn_weights.append(attn)
+            x, attns_layer = layer(x, condition, custom_attn_mask=custom_attn_mask)
+            if len(attns_layer) == 2: # cross attn was used
+                attns_dec.append({"self": attns_layer[0], "cross": attns_layer[1]})
+            else:
+                attns_dec.append({"self": attns_layer[0]})
         x = self.ln(x)
-        return x, attn_weights
+        return x, attns_dec
 
 
 
@@ -588,12 +591,15 @@ class TransformerFiLMDecoder(nn.Module):
         self.ln = LayerNorm(embed_dim, bias)
 
     def forward(self, x, condition, context=None, custom_attn_mask=None):
-        attn_weights = []
+        attns_dec = []
         for layer in self.blocks:
-            x, attn_self, attn_cross = layer(x, condition, context, custom_attn_mask=custom_attn_mask)
-            attn_weights.append({"self": attn_self, "cross": attn_cross})
+            x, attns_layer = layer(x, condition, context, custom_attn_mask=custom_attn_mask)
+            if len(attns_layer) == 2: # cross attn was used
+                attns_dec.append({"self": attns_layer[0], "cross": attns_layer[1]})
+            else:
+                attns_dec.append({"self": attns_layer[0]})
         x = self.ln(x)
-        return x, attn_weights
+        return x, attns_dec
 
 
 class TransformerFiLMDecoderInterleaved(nn.Module):

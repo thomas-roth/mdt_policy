@@ -77,8 +77,8 @@ class GCDenoiser(nn.Module):
             The output of the forward pass as well as the attention weights.
         """
         c_skip, c_out, c_in = [append_dims(x, action.ndim) for x in self.get_scalings(sigma)]
-        result, attn_enc_dec = self.inner_model(state, action * c_in, goal, sigma, **kwargs)
-        return result * c_out + action * c_skip, attn_enc_dec
+        result, attns_enc_dec = self.inner_model(state, action * c_in, goal, sigma, **kwargs)
+        return result * c_out + action * c_skip, attns_enc_dec
     
     def forward_context_only(self, state, action, goal, sigma, **kwargs):
         """
